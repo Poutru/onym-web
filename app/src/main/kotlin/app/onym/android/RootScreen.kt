@@ -5,6 +5,8 @@ package app.onym.android
 // android.nonTransitiveRClass.
 import app.onym.android.strings.R
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -744,6 +746,54 @@ fun RootScreen(
                     dependencies.refreshBackupVendors()
                     backupVendors.forEach { it.settingsFlow.refresh() }
                 }
+                // Push seat (NOTIFICATIONS section). The toggle's
+                // checked state binds to the PERSISTED preference, so
+                // a permission denial — which never calls enable() —
+                // snaps the switch back without bookkeeping.
+                val pushDeps = dependencies.push
+                val pushEnabled by (pushDeps?.enabledFlow
+                    ?: kotlinx.coroutines.flow.flowOf(false))
+                    .collectAsStateWithLifecycle(initialValue = false)
+                val pushRegistered by (pushDeps?.registeredFlow
+                    ?: kotlinx.coroutines.flow.flowOf(false))
+                    .collectAsStateWithLifecycle(initialValue = false)
+                val pushState by (
+                    pushDeps?.registrationState
+                        ?: kotlinx.coroutines.flow.flowOf(
+                            app.onym.android.push.PushRegistrationState.Idle,
+                        )
+                    ).collectAsStateWithLifecycle(
+                    initialValue = app.onym.android.push.PushRegistrationState.Idle,
+                )
+                val settingsContext = LocalContext.current
+                // The channel gate at the door (same snapback shape
+                // as a permission denial): a user who blocked only
+                // the `messages` channel still passes the
+                // POST_NOTIFICATIONS check, and enabling anyway would
+                // register a device whose wakes can never render —
+                // undone silently by the next revocation check. So
+                // the blocked state is surfaced instead, with a path
+                // to the channel's own settings.
+                var pushChannelBlocked by remember { mutableStateOf(false) }
+                val enableOrExplain = {
+                    if (pushDeps != null) {
+                        if (pushDeps.notificationsRenderable()) {
+                            pushChannelBlocked = false
+                            pushDeps.enable()
+                        } else {
+                            pushChannelBlocked = true
+                        }
+                    }
+                }
+                val notificationsPermissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission(),
+                ) { granted ->
+                    // Application-scoped fire-and-forget: leaving
+                    // Settings must not cancel a toggle mid-flight.
+                    if (granted) enableOrExplain()
+                    // Denied: nothing was persisted; the toggle stays
+                    // off on its own.
+                }
                 SettingsScreen(
                     identitiesViewModel = identitiesVm,
                     onRelayerClick = { navController.navigate(ROUTE_RELAYER_SETTINGS) },
@@ -764,6 +814,64 @@ fun RootScreen(
                         coroutineScope.launch {
                             dependencies.readReceiptsPreferenceProvider.set(on)
                         }
+                    },
+                    onTogglePush = pushDeps?.let { push ->
+                        { on: Boolean ->
+                            if (!on) {
+                                pushChannelBlocked = false
+                                push.disable()
+                            } else if (
+                                android.os.Build.VERSION.SDK_INT >= 33 &&
+                                androidx.core.content.ContextCompat.checkSelfPermission(
+                                    settingsContext,
+                                    android.Manifest.permission.POST_NOTIFICATIONS,
+                                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                            ) {
+                                // enable() runs from the launcher's
+                                // grant callback; a denial leaves the
+                                // preference (and so the switch) off.
+                                notificationsPermissionLauncher.launch(
+                                    android.Manifest.permission.POST_NOTIFICATIONS,
+                                )
+                            } else {
+                                enableOrExplain()
+                            }
+                        }
+                    },
+                    pushEnabled = pushEnabled,
+                    pushRegistered = pushRegistered,
+                    pushActivationFailed = pushState
+                        is app.onym.android.push.PushRegistrationState.Failed,
+                    pushActivationWillRetry = (
+                        pushState as? app.onym.android.push.PushRegistrationState.Failed
+                        )?.willRetry != false,
+                    pushChannelBlocked = pushChannelBlocked,
+                    onOpenNotificationChannelSettings = {
+                        // The channel's own screen when the channel is
+                        // the thing blocked; the app's notification
+                        // screen otherwise (app-level off, API < 33).
+                        val manager = androidx.core.app.NotificationManagerCompat
+                            .from(settingsContext)
+                        val channelBlocked = manager
+                            .getNotificationChannelCompat(PushMessagingService.CHANNEL_ID)
+                            ?.importance ==
+                            androidx.core.app.NotificationManagerCompat.IMPORTANCE_NONE
+                        val intent = if (channelBlocked) {
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS,
+                            ).putExtra(
+                                android.provider.Settings.EXTRA_CHANNEL_ID,
+                                PushMessagingService.CHANNEL_ID,
+                            )
+                        } else {
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS,
+                            )
+                        }.putExtra(
+                            android.provider.Settings.EXTRA_APP_PACKAGE,
+                            settingsContext.packageName,
+                        )
+                        runCatching { settingsContext.startActivity(intent) }
                     },
                     onNostrRelaysClick = { navController.navigate(ROUTE_NOSTR_RELAYS) },
                     nostrRelaysCount = nostrRelays.endpoints.size,

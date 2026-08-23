@@ -40,8 +40,10 @@ import app.onym.android.settings.RelayerSettingsViewModel
 import app.onym.android.transport.nostr.NostrInboxTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -123,6 +125,17 @@ private val Context.chatPreferencesDataStore: DataStore<Preferences> by preferen
  */
 private val Context.moderationDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "app.onym.android.moderation_prefs",
+)
+
+/**
+ * DataStore Preferences for the push seat: the opt-in flag and the
+ * reconciler's registration bookkeeping (fingerprint, expiry, the
+ * registered token, the pending server-side forget). The token is a
+ * capability worth keeping out of other domains' files — separate
+ * blob per the one-domain-one-blob convention.
+ */
+private val Context.pushDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "app.onym.android.push_prefs",
 )
 
 /**
@@ -1420,6 +1433,14 @@ class OnymApplication : Application() {
                 )
             else -> null
         }
+        // ONE prepare limiter for every PlayIntegrityAttestationProvider
+        // in this process: the 5-prepares-per-minute cap it guards is
+        // Google's PER-APP-INSTANCE budget, so the moderation and push
+        // seats must draw from the same window — two independent
+        // limiters would admit 10/min and let the seats drive each
+        // other into TOO_MANY_REQUESTS. Per-provider backoff state
+        // stays separate by design.
+        val playIntegrityPrepareLimiter = app.onym.android.moderation.PrepareRateLimiter()
         val moderationUi: ModerationUiDependencies?
         if (moderationBackend == null) {
             moderationUi = null
@@ -1432,6 +1453,7 @@ class OnymApplication : Application() {
                 app.onym.android.moderation.PlayIntegrityAttestationProvider(
                     context = applicationContext,
                     cloudProjectNumber = BuildConfig.PLAY_CLOUD_PROJECT_NUMBER,
+                    rateLimiter = playIntegrityPrepareLimiter,
                 )
             }
             val moderationSigner = IdentityModerationSigner(identityRepository)
@@ -1638,6 +1660,164 @@ class OnymApplication : Application() {
             )
         }
 
+        // ─── Push seat (content-free relay-watcher wakes) ───────────
+        // Dark by default, moderation's pattern: active only when the
+        // push backend is configured (PUSH_BASE_URL — see
+        // app/build.gradle.kts). Dark means NOTHING is built — no
+        // Settings section, no Firebase token fetch, no registration —
+        // so CI (which has no google-services.json) and every
+        // pre-launch build behave exactly as before the seat existed.
+        val pushUi: PushUiDependencies?
+        if (BuildConfig.PUSH_BASE_URL.isBlank()) {
+            pushUi = null
+        } else {
+            val pushBackend = app.onym.android.push.OkHttpPushBackendClient(
+                httpClient = httpClient,
+                baseUrl = BuildConfig.PUSH_BASE_URL,
+                // Emulator loopback is a debug-build convenience only;
+                // a release binary refuses any non-https base URL.
+                allowInsecureLoopback = BuildConfig.DEBUG,
+            )
+            val pushPreference = app.onym.android.push.DataStorePushPreferenceProvider(
+                applicationContext.pushDataStore,
+            )
+            val pushInteractor = app.onym.android.push.PushRegistrationInteractor(
+                backend = pushBackend,
+                // A device-local random key, NOT the identity key:
+                // the backend discards the verified userKey, so the
+                // identity key buys nothing and would let the backend
+                // link persona keys across periodic re-registrations
+                // (see DevicePushSigner's KDoc). Coordinated with iOS.
+                signer = DevicePushSigner(applicationContext),
+                // Reused, not forked: :moderation's provider already
+                // owns the single-flight + prepare-cap + backoff
+                // story, and its API takes exactly the requestHash
+                // the push payload computes. A second instance (not
+                // moderation's) so the two seats' backoff states
+                // don't couple — but the SAME prepare limiter, since
+                // the 5/min prepare cap is per app instance (see the
+                // shared limiter's construction above); same Cloud
+                // project number.
+                attestation = PlayIntegrityPushAttestation(
+                    app.onym.android.moderation.PlayIntegrityAttestationProvider(
+                        context = applicationContext,
+                        cloudProjectNumber = BuildConfig.PLAY_CLOUD_PROJECT_NUMBER,
+                        rateLimiter = playIntegrityPrepareLimiter,
+                    ),
+                ),
+                preference = pushPreference,
+                scope = applicationScope,
+            )
+            // ALL identities' inbox tags register together (the
+            // footnote in Settings says so): a wake must arrive no
+            // matter which identity was messaged. "Not loaded yet"
+            // and "loaded, and empty" are DIFFERENT values here: the
+            // reconciler's contract is that an empty list is
+            // meaningful (no identities → watch nothing) and must be
+            // SENT, so mapping emptiness to null would swallow the
+            // one register that matters most — the clearing one after
+            // the last identity (or every relay) is deleted. So the
+            // flow gates once on each store's bootstrap signal —
+            // identity: the first non-null snapshot (the launch-time
+            // bootstrap() populates it); relays: the first hydrated
+            // configuration (post-bootstrap it is either non-empty or
+            // deliberately emptied with hasUserInteracted set; the
+            // pre-load initial is empty+non-interacted) — and from
+            // then on every emission flows through as-is, empty
+            // included. Zero relays maps to "watch nothing": the
+            // backend refuses empty-relay entries.
+            val pushSubscriptions: kotlinx.coroutines.flow.Flow<
+                List<app.onym.android.push.PushSubscription>?,
+                > = kotlinx.coroutines.flow.flow {
+                emit(null)
+                identityRepository.snapshots.filterNotNull().first()
+                nostrRelaysRepository.snapshots.first {
+                    it.endpoints.isNotEmpty() || it.hasUserInteracted
+                }
+                emitAll(
+                    kotlinx.coroutines.flow.combine(
+                        identityRepository.identities,
+                        nostrRelaysRepository.snapshots,
+                    ) { summaries, relays ->
+                        val urls = relays.endpoints.map { it.url }
+                        if (urls.isEmpty()) {
+                            emptyList()
+                        } else {
+                            summaries.map { summary ->
+                                app.onym.android.push.PushSubscription(
+                                    tag = app.onym.android.identity.IdentityRepository
+                                        .inboxTag(summary.inboxPublicKey),
+                                    relays = urls,
+                                )
+                            }
+                        }
+                    },
+                )
+            }
+            val pushCoordinator = PushCoordinator(
+                interactor = pushInteractor,
+                preference = pushPreference,
+                scope = applicationScope,
+                subscriptions = pushSubscriptions,
+                fetchToken = {
+                    // runCatching: Firebase is unconfigured when the
+                    // operator set PUSH_BASE_URL without shipping
+                    // google-services.json — degrade to "no token
+                    // yet", never crash the enable path.
+                    runCatching {
+                        com.google.firebase.messaging.FirebaseMessaging.getInstance()
+                            .token.await()
+                    }.getOrNull()
+                },
+                // Channel-aware: app-level areNotificationsEnabled()
+                // alone misses a user who blocked only the `messages`
+                // channel — the shared helper is the one definition
+                // both the render gate and this revocation check use.
+                notificationsEnabled = {
+                    PushMessagingService.notificationsRenderable(applicationContext)
+                },
+                // The manifest ships firebase_messaging_auto_init_enabled
+                // (and default data collection) FALSE, so a configured
+                // build makes no contact with Google at process start;
+                // opting in flips auto-init on, opting out flips it
+                // back. runCatching for the same reason as fetchToken:
+                // an unconfigured Firebase must degrade, never crash.
+                firebaseAutoInit = { on ->
+                    runCatching {
+                        com.google.firebase.messaging.FirebaseMessaging.getInstance()
+                            .isAutoInitEnabled = on
+                    }
+                },
+                renderGateMirror = { on ->
+                    PushMessagingService.writeRenderGate(applicationContext, on)
+                },
+            )
+            pushCoordinator.start()
+            pushUi = PushUiDependencies(
+                enabledFlow = pushPreference.enabledFlow,
+                registeredFlow = pushPreference.registeredFlow,
+                registrationState = pushInteractor.state,
+                // applicationScope, not the caller's composition
+                // scope: enable/disable are toggle-sized fire-and-
+                // forget state changes, and running them on a
+                // screen-lifetime scope let a navigate-away cancel
+                // between the preference write and the wake.
+                enable = {
+                    // Channel first: the OS switch for this exact
+                    // feature should exist in system settings the
+                    // moment the user opts in, not after the first
+                    // wake happens to arrive.
+                    PushMessagingService.ensureChannel(applicationContext)
+                    applicationScope.launch { pushCoordinator.enable() }
+                },
+                disable = { applicationScope.launch { pushCoordinator.disable() } },
+                checkRevocation = { pushCoordinator.checkRevocation() },
+                notificationsRenderable = {
+                    PushMessagingService.notificationsRenderable(applicationContext)
+                },
+            )
+        }
+
         val onboardingUi = OnboardingUiDependencies(
             shouldOnboard = onboardingPending,
             makeFlow = {
@@ -1828,6 +2008,7 @@ class OnymApplication : Application() {
         return AppDependencies(
             nostrSignerProvider = nostrSignerProvider,
             moderation = moderationUi,
+            push = pushUi,
             backupVendors = backupVendors,
             refreshBackupVendors = refreshBackupVendors,
             makeRecoveryPhraseBackupViewModel = { activityProvider ->

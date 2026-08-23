@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -142,6 +143,33 @@ fun SettingsScreen(
     /** Review the open cases: the single case's appeal when there is
      *  one, otherwise the Moderation screen that lists them all. */
     onReviewCases: () -> Unit = {},
+    /** Push seat toggle (NOTIFICATIONS section). Null exactly when
+     *  the seat is dark (no PUSH_BASE_URL) — the section is omitted
+     *  entirely, the Discovery/Moderation posture. The host owns the
+     *  POST_NOTIFICATIONS request; a denial never flips the
+     *  preference, so the toggle snaps back on its own. */
+    onTogglePush: ((Boolean) -> Unit)? = null,
+    /** The push opt-in preference (default OFF). */
+    pushEnabled: Boolean = false,
+    /** Whether the push backend has confirmed this device's
+     *  registration. `pushEnabled && !pushRegistered` renders the
+     *  "still activating" footnote under the toggle. */
+    pushRegistered: Boolean = false,
+    /** True when the reconciler's last pass FAILED — while `enabled
+     *  && !registered`, the footnote stops claiming "turning on…"
+     *  and says the attempt failed. */
+    pushActivationFailed: Boolean = false,
+    /** With [pushActivationFailed]: true when a retry is coming on
+     *  its own ("will keep trying"), false when the deterministic
+     *  attempt bound was reached ("check configuration"). */
+    pushActivationWillRetry: Boolean = true,
+    /** True after an enable attempt found the `messages` channel (or
+     *  app-level notifications) blocked: nothing was persisted, the
+     *  switch stays off, and the footnote below the toggle explains
+     *  and links to the channel's system settings. */
+    pushChannelBlocked: Boolean = false,
+    /** Opens the `messages` channel's system settings screen. */
+    onOpenNotificationChannelSettings: (() -> Unit)? = null,
     /** Settings → Device Backup entry. Null when no backup operator is
      *  consented for any vendor (or the identity has no recovery
      *  phrase) — the section is omitted entirely, same posture as
@@ -347,6 +375,81 @@ fun SettingsScreen(
                 SettingsFootnote(
                     stringResource(R.string.settings_anchors_footnote),
                 )
+            }
+
+            // ─── NOTIFICATIONS ─────────────────────────────────────
+            // Present exactly when the push seat is wired (dark
+            // launch: no PUSH_BASE_URL, no section). The long
+            // footnote is the honest half of the toggle: it names
+            // what the Onym-run watcher learns and what Google
+            // carries, because an opt-in nobody can evaluate isn't
+            // consent.
+            if (onTogglePush != null) {
+                item {
+                    SettingsSectionLabel(
+                        stringResource(R.string.settings_section_notifications),
+                    )
+                }
+                item {
+                    SettingsCard {
+                        SettingsRow(
+                            leading = {
+                                SettingsTileBox(
+                                    icon = Icons.Filled.Notifications,
+                                    background = if (pushEnabled) {
+                                        SettingsTile.Orange
+                                    } else {
+                                        SettingsTile.Gray
+                                    },
+                                )
+                            },
+                            title = stringResource(R.string.settings_push_title),
+                            subtitle = stringResource(R.string.settings_push_subtitle),
+                            showChevron = false,
+                            trailing = {
+                                Switch(
+                                    checked = pushEnabled,
+                                    onCheckedChange = onTogglePush,
+                                    modifier = Modifier
+                                        .testTag("settings.notifications_toggle"),
+                                )
+                            },
+                            onClick = { onTogglePush(!pushEnabled) },
+                            isLast = true,
+                        )
+                    }
+                }
+                if (pushChannelBlocked) {
+                    item {
+                        SettingsFootnote(
+                            stringResource(R.string.settings_push_channel_blocked),
+                            modifier = Modifier
+                                .clickable(
+                                    enabled = onOpenNotificationChannelSettings != null,
+                                ) { onOpenNotificationChannelSettings?.invoke() }
+                                .testTag("settings.push_channel_blocked"),
+                        )
+                    }
+                }
+                if (pushEnabled && !pushRegistered) {
+                    item {
+                        SettingsFootnote(
+                            stringResource(
+                                when {
+                                    !pushActivationFailed ->
+                                        R.string.settings_push_activating
+                                    pushActivationWillRetry ->
+                                        R.string.settings_push_failed_retrying
+                                    else ->
+                                        R.string.settings_push_failed_check
+                                },
+                            ),
+                        )
+                    }
+                }
+                item {
+                    SettingsFootnote(stringResource(R.string.settings_push_footnote))
+                }
             }
 
             // ─── DATA ──────────────────────────────────────────────

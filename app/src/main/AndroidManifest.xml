@@ -42,6 +42,16 @@
         android:name="android.hardware.microphone"
         android:required="false" />
 
+    <!--
+        POST_NOTIFICATIONS (API 33+): the local, content-free "New
+        message" notification `PushMessagingService` renders on an FCM
+        wake. Requested at runtime by the Settings → Notifications
+        toggle; the push seat is opt-in and OFF by default, and a
+        denial simply leaves it off. Below API 33 the permission is
+        granted by install.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:name=".OnymApplication"
         android:label="@string/app_name"
@@ -105,6 +115,50 @@
                 <data android:scheme="onym" android:host="join" />
             </intent-filter>
         </activity>
+
+        <!--
+            The receiving end of the content-free push wake. FCM
+            requires the MESSAGING_EVENT filter; not exported — only
+            Google Play services delivers to it. The service is
+            deliberately graph-free (see its KDoc): it renders a local
+            notification from string resources and relays token
+            rotations through PushTokenRelay, nothing else. Harmless
+            when the push seat is dark or google-services.json is
+            absent — no FCM delivery ever occurs then.
+        -->
+        <service
+            android:name=".PushMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!--
+            Firebase stays ASLEEP until the user opts in. Without
+            these, firebase-messaging auto-initializes at every
+            process start of a configured build: Firebase
+            Installations registers with Google and an FCM token is
+            minted for every user, including those who never touched
+            the toggle. "Dark unless PUSH_BASE_URL is empty" is not
+            "dark unless the user opts in" — the shipping build has a
+            base URL. With auto-init and default data collection off,
+            NO Firebase registration and NO contact with Google
+            happens until the enable path flips
+            FirebaseMessaging.isAutoInitEnabled to true (and the
+            disable path flips it back — see PushCoordinator). The
+            explicit token fetch in the enable path
+            (FirebaseMessaging.getInstance().token) still works with
+            auto-init off, per the firebase-messaging docs: the
+            manifest flag only suppresses UNPROMPTED token generation
+            at startup, never an explicit request.
+        -->
+        <meta-data
+            android:name="firebase_messaging_auto_init_enabled"
+            android:value="false" />
+        <meta-data
+            android:name="firebase_data_collection_default_enabled"
+            android:value="false" />
 
         <!-- Grants a share target read access to one exported proof,
              and nothing else: the authority is scoped to the
