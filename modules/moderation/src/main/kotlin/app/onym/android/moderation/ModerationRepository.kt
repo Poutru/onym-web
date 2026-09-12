@@ -276,6 +276,81 @@ class ModerationRepository(
     }
 
     /**
+     * Drop every mandate, report, and appeal row whose owning identity
+     * is not one of [keepingUsers] (`onym:key:<hex>` references).
+     * Called when an identity is removed, and swept once at launch for
+     * the devices that removed one before this existed.
+     *
+     * The ledgers' own documentation already named this contract —
+     * [CaseSubmissionRecord.user] is described as carrying "the same
+     * identity-removal purge contract as the report ledger" — but
+     * nothing implemented it on this platform, so a removed identity
+     * left its filings, its statements' digests, and its signed
+     * consent on disk indefinitely. Removal is the user saying that
+     * identity is over; retaining its moderation history outlives the
+     * one thing that made it theirs.
+     *
+     * Resolved appeal rows are not spared here, unlike in
+     * [purgeOrphanedAppeals]: that one keeps them so a returning user
+     * is warned their case already has a filing, which presumes the
+     * identity is still on the device to return.
+     *
+     * [keepingUsers] is a provider, not a set, and it is evaluated
+     * once per ledger INSIDE that ledger's lock. A set captured before
+     * the lock predates anything written while waiting for it: an
+     * identity added and consented in that window would have its brand
+     * new mandate deleted by a keep-set that never knew about it.
+     *
+     * The locks are the ledgers' own — the ones [fileReport] and
+     * [appeal] hold across their whole read-modify-write — so a filing
+     * in flight cannot be overwritten by a purge that loaded before it
+     * appended. They are taken in sequence and never nested:
+     * [fileReport] holds [reportMutex] while resolving its mandate
+     * through [mutex], so holding [mutex] across a [reportMutex]
+     * acquisition here would invert that order and deadlock. For the
+     * same reason a caller must not hold a lock of its own across this
+     * call — notably `IdentityRepository`'s, whose mutex the report and
+     * appeal paths reach through `signer.userKeyId()`.
+     *
+     * This cannot validate what the provider returns: every row outside
+     * the set is deleted, so an empty set deletes everything. A caller
+     * that cannot prove its list of identities is loaded must not call
+     * at all rather than pass what it has.
+     *
+     * Nothing here touches gate state or the device's marks: what this
+     * device carries is read back from the attestation provider on the
+     * next check, under whichever identity holds a mandate then.
+     */
+    suspend fun purgeForRemovedIdentities(keepingUsers: suspend () -> Set<String>) {
+        mutex.withLock {
+            ensureLoadedLocked()
+            val keep = keepingUsers()
+            val records = state.value.records
+            val kept = records.filter { it.mandate.user in keep }
+            if (kept.size != records.size) {
+                mandateStore.save(kept)
+                state.value = ModerationState(loaded = true, records = kept)
+            }
+        }
+        reportStore?.let { reports ->
+            reportMutex.withLock {
+                val keep = keepingUsers()
+                val records = reports.load()
+                val kept = records.filter { it.report.reporter in keep }
+                if (kept.size != records.size) saveReports(kept)
+            }
+        }
+        caseSubmissionStore?.let { submissions ->
+            appealMutex.withLock {
+                val keep = keepingUsers()
+                val records = submissions.load()
+                val kept = records.filter { it.user in keep }
+                if (kept.size != records.size) saveSubmissions(kept)
+            }
+        }
+    }
+
+    /**
      * The current identity's active record still awaiting authority
      * registration, or null. The retry hook: a caller holding a
      * directory listing for its authority completes delivery with

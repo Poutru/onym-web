@@ -1542,6 +1542,98 @@ class OnymApplication : Application() {
                     }.getOrNull()
                 },
             )
+            // Cascade the moderation ledgers on identity removal:
+            // the mandate, the filed-report rows, the appeal
+            // submissions. Registered here rather than beside the
+            // other removal hooks because the repository it needs is
+            // built in this block.
+            //
+            // The listener body does one synchronous read and hands
+            // the rest to the application scope. It has to: it runs
+            // inside IdentityRepository's own non-reentrant mutex, and
+            // the purge takes the report and appeal locks, which
+            // `fileReport` and `appeal` hold while resolving a mandate
+            // through `signer.userKeyId()` → `bootstrap()` → that same
+            // identity mutex. Purging inline is a lock-order inversion
+            // against a filing in flight: the listener waits on
+            // `reportMutex`, the filing waits on the identity mutex,
+            // and every bootstrap, selection and signature in the
+            // process wedges behind a mutex nothing will release.
+            // Nothing requires the purge to finish before the wipe —
+            // the rows are already unreachable by every read path,
+            // which all filter by the current identity's key.
+            //
+            // The synchronous read is the check. The summary list is a
+            // StateFlow that stays empty until something loads
+            // identity storage, and `restore()` from the recovery flow
+            // can fire this listener before anything has — an empty
+            // keep-set handed to a purge that deletes everything
+            // outside it, including the rows of the identity being
+            // restored onto. Listeners run before the wipe, so a
+            // loaded list still contains the id being removed; one
+            // that doesn't is nobody's answer, and this declines
+            // rather than guesses. The launch sweep catches what it
+            // skips on the next start.
+            identityRepository.registerRemovalListener { removed ->
+                if (ModerationIdentityRemoval.listIsLoaded(
+                        identityRepository.identities.value,
+                        removed,
+                    )
+                ) {
+                    applicationScope.launch {
+                        // Wait out the wipe before reading the list the
+                        // purge keeps: launched concurrently, this can
+                        // observe the pre-wipe list, whose keep-set
+                        // still contains the removed identity and so
+                        // purges nothing at all — silently, until the
+                        // next launch sweep. The identity that is on
+                        // its way out is exactly what leaving the list
+                        // signals.
+                        identityRepository.identities.first { summaries ->
+                            summaries.none { it.id == removed }
+                        }
+                        runCatching {
+                            moderationRepository.purgeForRemovedIdentities {
+                                ModerationIdentityRemoval.keepSet(
+                                    identityRepository.identities.value,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            // One sweep for the devices that removed an identity
+            // before the cascade above existed — their rows are
+            // already on disk and nothing else will ever look at them
+            // again. (Only in this branch: a build with no moderation
+            // backend configured never reaches here, so rows a
+            // configured install left behind on the same device wait
+            // for a build that does.)
+            //
+            // Waits for the first non-empty summary list rather than
+            // bootstrapping the identity itself: an empty list at this
+            // point means nobody has loaded identity storage yet, not
+            // that the device holds none, and minting one here to find
+            // out would pre-empt onboarding. Past that point the list
+            // is loaded and an empty one means what it says, which is
+            // why the purge re-reads it rather than closing over this
+            // first non-empty value.
+            //
+            // No timeout, deliberately. A device parked in onboarding
+            // has no identities and therefore nothing this could
+            // purge; the moment it gains one — this minute or an hour
+            // in — is exactly when the sweep should run. Until then it
+            // is one suspended collector on a StateFlow.
+            applicationScope.launch {
+                identityRepository.identities.first { it.isNotEmpty() }
+                runCatching {
+                    moderationRepository.purgeForRemovedIdentities {
+                        ModerationIdentityRemoval.keepSet(
+                            identityRepository.identities.value,
+                        )
+                    }
+                }
+            }
             val gateCheckRepository = app.onym.android.moderation.GateCheckRepository(
                 attestation = attestation,
                 backend = moderationBackend,
