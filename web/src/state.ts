@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { inviteSchema, messageSchema } from "./wire";
+import { inviteSchema, messageSchema, offerSchema } from "./wire";
 export const settingsSchema = z.object({
   relays: z.array(z.string().url()).min(1).max(5),
   relayer: z.union([z.literal("/api/chain"), z.string().url()]),
@@ -23,6 +23,16 @@ export const stateSchema = z.object({
   name: z.string().min(1).max(60),
   settings: settingsSchema,
   groups: z.array(groupSchema).max(100),
+  offers: z
+    .array(
+      offerSchema.extend({
+        sender: z.string().regex(/^[a-f0-9]{64}$/),
+        receivedAt: z.number(),
+        status: z.enum(["new", "requested", "dismissed", "joined"]),
+      }),
+    )
+    .max(100)
+    .optional(),
   pending: z
     .array(
       z.object({

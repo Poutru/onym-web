@@ -11,7 +11,7 @@ import {
 } from "./vault";
 import { stateSchema, defaultSettings, type State } from "./state";
 import { hex, b64 } from "./bytes";
-import { parseInviteLink } from "./wire";
+import { parseInviteLink, offerLink } from "./wire";
 import { secureUrl } from "./transport";
 import "./style.css";
 const errorText = (e: unknown) =>
@@ -229,10 +229,14 @@ function App() {
   const g = client?.state.groups.find((g) => g.group_id === selected);
   const me = client ? hex(client.identity.blsPublic) : "";
   let preview: ReturnType<typeof parseInviteLink> | null = null;
+  let previewError = "";
   try {
-    if (link) preview = parseInviteLink(link);
-  } catch {
-    /* preview only */
+    if (link.trim()) preview = parseInviteLink(link);
+  } catch (e) {
+    previewError =
+      e instanceof Error && !e.message.startsWith("[")
+        ? e.message
+        : "Приглашение повреждено или имеет неподдерживаемый формат. Скопируйте ссылку целиком.";
   }
   const flash = (
     <>
@@ -557,6 +561,38 @@ function App() {
                   </button>
                 ))
               )}
+              {(client.state.offers ?? [])
+                .filter((o) => o.status === "new")
+                .map((o) => (
+                  <div className="card" key={o.group_id + o.sender}>
+                    <span className="eyebrow">Приглашение</span>
+                    <h3>{o.group_name || "Группа Onym"}</h3>
+                    <p className="small">
+                      {o.inviter_alias || "Участник Onym"} приглашает вас
+                    </p>
+                    {o.invitation_message && (
+                      <p className="small pre">{o.invitation_message}</p>
+                    )}
+                    <button
+                      className="primary full"
+                      onClick={() => {
+                        setLink(offerLink(o));
+                        setTab("join");
+                      }}
+                    >
+                      Открыть приглашение
+                    </button>
+                    <button
+                      className="text-button"
+                      disabled={busy}
+                      onClick={() =>
+                        run(() => client.dismissOffer(o.group_id, o.sender))
+                      }
+                    >
+                      Отклонить
+                    </button>
+                  </div>
+                ))}
               {client.state.pending.map((p) => (
                 <div className="pending" key={p.groupId}>
                   <strong>{p.name}</strong>
@@ -692,6 +728,11 @@ function App() {
                 spellCheck={false}
               />
             </label>
+            {previewError && (
+              <p role="alert" className="alert error">
+                {previewError}
+              </p>
+            )}
             {preview && (
               <div className="card">
                 <h3>{preview.group_name || "Группа Onym"}</h3>

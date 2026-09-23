@@ -11,6 +11,7 @@ import { leafHash, commitment } from "./poseidon";
 import { b64, unb64, hex, utf8, concat, equal } from "./bytes";
 import {
   parseInviteLink,
+  offerSchema,
   seal,
   openEnvelope,
   inviteSchema,
@@ -173,6 +174,7 @@ export class Client {
     this.state.phrase = "";
     this.state.groups = [];
     this.state.pending = [];
+    this.state.offers = [];
   }
   async join(link: string) {
     const cap = parseInviteLink(link);
@@ -216,13 +218,58 @@ export class Client {
       .concat(pending);
     await this.save();
     await this.transport!.send(encrypted, inboxTag(unb64(cap.intro_pub)));
-    if (this.live)
+    if (this.live) {
+      for (const offer of this.state.offers ?? [])
+        if (
+          offer.group_id === cap.group_id &&
+          offer.intro_pub === cap.intro_pub
+        )
+          offer.status = "requested";
+      await this.save();
       this.notice(
         "Запрос принят реле. Ожидаем одобрения администратора в Onym.",
       );
+    }
+  }
+  async dismissOffer(groupId: string, sender: string) {
+    if (!this.live) return;
+    const offer = this.state.offers?.find(
+      (o) => o.group_id === groupId && o.sender === sender,
+    );
+    if (offer) {
+      offer.status = "dismissed";
+      await this.save();
+    }
   }
   private async receive(sender: string, payload: unknown) {
     if (!this.live) return;
+    const offer = offerSchema.safeParse(payload);
+    if (offer.success) {
+      if (this.state.groups.some((g) => g.group_id === offer.data.group_id))
+        return;
+      const offers = (this.state.offers ??= []);
+      if (
+        offers.some(
+          (o) => o.group_id === offer.data.group_id && o.sender === sender,
+        ) ||
+        offers.length >= 100
+      )
+        return;
+      offers.push({
+        ...offer.data,
+        sender,
+        receivedAt: Date.now(),
+        status: "new",
+      });
+      await this.save();
+      if (this.live)
+        this.notice(
+          "Получено приглашение в «" +
+            (offer.data.group_name || "группу Onym") +
+            "». Оно в списке переписки.",
+        );
+      return;
+    }
     const invite = inviteSchema.safeParse(payload);
     if (invite.success) {
       const inv = invite.data;
@@ -250,6 +297,8 @@ export class Client {
       this.state.pending = this.state.pending.filter(
         (p) => p.groupId !== inv.group_id,
       );
+      for (const offer of this.state.offers ?? [])
+        if (offer.group_id === inv.group_id) offer.status = "joined";
       await this.save();
       this.notice("Вы присоединились к группе «" + inv.name + "».");
       const parked = this.parked.splice(0);

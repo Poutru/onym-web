@@ -67,13 +67,31 @@ export const capabilitySchema = z.object({
     .refine((s) => s === s.trim() && utf8(s).length <= 1500)
     .nullish(),
 });
+export const offerSchema = capabilitySchema.extend({
+  offer_version: z.literal(1),
+  inviter_alias: z.string().max(200),
+  invitation_message: z.string().max(16000).nullish(),
+});
+export function offerLink(offer: z.infer<typeof capabilitySchema>) {
+  return (
+    "https://onym.app/join?c=" +
+    encodeURIComponent(b64(utf8(JSON.stringify(capabilitySchema.parse(offer)))))
+  );
+}
 export function parseInviteLink(input: string) {
   if (input.length > 12000) throw Error("Слишком длинная ссылка");
-  const url = new URL(input.trim());
+  const links = input
+    .trim()
+    .match(/(?:https:\/\/onym\.app\/join|onym:\/\/join)\/?\?[^\s<>"«»]+/g);
+  if (!links || links.length !== 1)
+    throw Error(
+      "Вставьте одну ссылку приглашения https://onym.app/join?c=… или onym://join?c=…",
+    );
+  const url = new URL(links[0].replace(/[).,;]+$/, ""));
   if (!(
     (url.protocol === "https:" &&
       url.hostname === "onym.app" &&
-      url.pathname === "/join") ||
+      ["/join", "/join/"].includes(url.pathname)) ||
     (url.protocol === "onym:" && url.hostname === "join")
   ))
     throw Error("Нужна ссылка приглашения onym.app/join?c=…");
