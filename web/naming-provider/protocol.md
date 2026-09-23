@@ -74,3 +74,9 @@ Limits: 120 requests/minute/IP, 100,000 stored records, 256 KiB upstream respons
 ## Operations
 
 Run `server.mjs` with Node 24. `BSN_KEY_FILE` is an existing raw 32-byte seed, `BSN_DB_FILE` is the private database path, `PORT` defaults to 4181 on loopback. The service never auto-generates or rotates a key. Keep the key and database outside release directories and back them up together. `bsn-np.service` and `nginx.conf` show the isolated systemd service and Atlas path proxy. Test with `npm test` from `web/`; no production key is used in tests.
+
+## Ready-to-sign Stellar binding transaction
+
+Onym Web constructs an **unsigned** XDR locally using the official Stellar SDK. It reloads the source account and sequence from Horizon, finds the first unused `OwnershipFull`/`OwnershipFullN` key, and creates exactly one ManageData operation containing the Onym signing key's Stellar address. Existing tags are never overwritten; the current account sequence prevents reuse after another transaction from the same source.
+
+The transaction uses Stellar PUBLIC, a 15-minute validity window, and the maximum of the current base fee and the observed p90 charged fee, capped at 0.01 XLM. The UI shows that exact fee and the current base reserve required for one new data entry. It offers XDR copy/download and a `web+stellar:tx` SEP-7 URI. No callback URL, secret, payment, signer change, or auto-submit is included. The holder signs and submits in their own Stellar wallet, then clicks “Я отправил — проверить связь”. Generating XDR alone neither modifies Stellar nor publishes a naming acceptance.
