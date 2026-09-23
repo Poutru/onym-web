@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import type { Client } from "./client";
 import { nameOffer, NAMING_NS, NAMING_URL, type NameRecord } from "./naming";
+import type { BindingTransaction } from "./stellarBinding";
 import { hex } from "./bytes";
 export function BSNName({
   client,
@@ -18,6 +19,40 @@ export function BSNName({
     tag: string;
     value: string;
   } | null>(null);
+  const [transaction, setTransaction] = useState<BindingTransaction | null>(
+    null,
+  );
+  async function prepare() {
+    setTransaction(null);
+    const { prepareBindingTransaction } = await import("./stellarBinding");
+    const result = await prepareBindingTransaction(
+      account.trim(),
+      client.identity.stellarAccount,
+    );
+    if (client.live) setTransaction(result);
+  }
+  async function check() {
+    setOffer(null);
+    setMissing(null);
+    setTransaction(null);
+    const result = await nameOffer(account.trim(), client.identity);
+    if (!client.live) return;
+    if (result.missing) {
+      setMissing(result);
+      await prepare();
+    } else setOffer(result.record);
+  }
+  function downloadXdr() {
+    if (!transaction) return;
+    const url = URL.createObjectURL(
+      new Blob([transaction.xdr], { type: "text/plain" }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "bsn-onym-link-unsigned.xdr";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   const active = client.nameFor(hex(client.identity.signingPublic));
   return (
     <section className="card bsn-panel">
@@ -43,24 +78,19 @@ export function BSNName({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          setOffer(null);
-          setMissing(null);
-          void run(async () => {
-            const result = await nameOffer(account.trim(), client.identity);
-            if (!client.live) return;
-            if (result.missing) setMissing(result);
-            else setOffer(result.record);
-          });
+          void run(check);
         }}
       >
         <label>
           Stellar-адрес BSN
           <input
+            disabled={busy}
             value={account}
             onChange={(e) => {
               setAccount(e.target.value);
               setOffer(null);
               setMissing(null);
+              setTransaction(null);
             }}
             placeholder="GCPJUXPETZEIJNEAAEO2LGZIA6IQNNWGOHPNP4ZQECDS6IKKIGJO5LFV"
             maxLength={56}
@@ -75,39 +105,113 @@ export function BSNName({
         <button className="secondary" disabled={busy}>
           Проверить имя
         </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || !account.trim() || !!active}
+          onClick={() =>
+            void run(async () => {
+              setOffer(null);
+              setMissing({
+                name: "",
+                tag: "OwnershipFull",
+                value: client.identity.stellarAccount,
+              });
+              await prepare();
+            })
+          }
+        >
+          Создать транзакцию привязки
+        </button>
       </form>
       {missing && (
         <div className="bsn-help">
-          <h3>Найдено имя: {missing.name}</h3>
+          <h3>
+            {missing.name
+              ? "Найдено имя: " + missing.name
+              : "Привязка аккаунта BSN"}
+          </h3>
           <p>
-            Добавьте в этом Stellar-аккаунте тег <code>OwnershipFull</code>.
-            Если он занят, используйте свободный номер:{" "}
-            <code>OwnershipFull3</code>, <code>OwnershipFull4</code> и т. д.
-            Существующие теги сохраняйте.
+            Готовая транзакция добавит один свободный тег связи. Подпишите и
+            отправьте её кошельком этого Stellar-аккаунта.
           </p>
-          <label>
-            Значение тега — адрес вашей идентичности Onym
-            <code className="pre">{missing.value}</code>
-          </label>
+          {transaction && (
+            <>
+              <p>
+                <strong>{transaction.tag}</strong>
+                <br />
+                <code className="pre">{transaction.target}</code>
+              </p>
+              <p className="fine">
+                Основная сеть Stellar. Комиссия: {transaction.feeXlm} XLM.
+                Дополнительный резерв под тег: {transaction.reserveXlm} XLM.
+                Существующие теги не меняются.
+              </p>
+              <label>
+                Готовая транзакция XDR
+                <textarea
+                  readOnly
+                  value={transaction.xdr}
+                  rows={4}
+                  spellCheck={false}
+                />
+              </label>
+              <div className="actions">
+                <button
+                  className="secondary"
+                  disabled={busy || transaction.expiresAt <= Date.now()}
+                  onClick={() =>
+                    void run(async () => {
+                      await navigator.clipboard.writeText(transaction.xdr);
+                    })
+                  }
+                >
+                  Скопировать XDR
+                </button>
+                <button
+                  className="secondary"
+                  disabled={transaction.expiresAt <= Date.now()}
+                  onClick={downloadXdr}
+                >
+                  Скачать XDR
+                </button>
+              </div>
+              {transaction.expiresAt > Date.now() ? (
+                <p>
+                  <a href={transaction.uri}>Открыть в Stellar-кошельке ↗</a>
+                </p>
+              ) : (
+                <p role="alert">Срок транзакции истёк. Сформируйте новую.</p>
+              )}
+              <p className="fine">
+                Действует до{" "}
+                {new Date(transaction.expiresAt).toLocaleTimeString("ru")}.
+                Открытие по ссылке требует кошелька с поддержкой SEP-7. В другом
+                кошельке импортируйте XDR. Если за это время отправили другую
+                транзакцию с этого аккаунта, сформируйте новую.
+              </p>
+            </>
+          )}
           <button
             className="secondary"
-            onClick={() =>
-              void run(async () => {
-                await navigator.clipboard.writeText(missing.value);
-              })
-            }
+            disabled={busy}
+            onClick={() => void run(prepare)}
           >
-            Скопировать значение
+            {transaction ? "Сформировать заново" : "Сформировать транзакцию"}
           </button>
-          <p>
+          <button disabled={busy} onClick={() => void run(check)}>
+            Я отправил — проверить связь
+          </button>
+          <details>
+            <summary>Добавить тег вручную</summary>
+            <p>
+              Создайте свободный OwnershipFullN со значением{" "}
+              <code>{missing.value}</code>.
+            </p>
             <a href="https://eurmtl.me/bsn" target="_blank" rel="noreferrer">
               Открыть редактор BSN ↗
             </a>
-          </p>
-          <p className="fine">
-            Изменение подтверждается вашим Stellar-кошельком. После сохранения
-            снова нажмите «Проверить имя».
-          </p>
+          </details>
         </div>
       )}
       {offer && (
