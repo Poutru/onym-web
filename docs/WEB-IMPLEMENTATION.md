@@ -35,7 +35,7 @@ No mobile binary has been embedded. Standard curves/hash algorithms use pinned N
 
 ## Local validation record (2026-09-23)
 
-- Production build and TypeScript checks passed.
+- Production build and TypeScript checks passed. All 13 tests passed, including actual production-server HTML/assets and proxy rejection checks.
 - Native identity vectors and commitment fixtures passed.
 - Wrong password, malformed KDF, corrupt ciphertext and invalid signatures rejected.
 - Browser import of the public `abandon × 11 + about` test phrase produced the expected keys.
