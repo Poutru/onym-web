@@ -1,0 +1,29 @@
+[Unit]
+Description=BSN naming provider for Onym
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=bsn-np
+Group=bsn-np
+WorkingDirectory=/opt/bsn-np/current
+ExecStart=/opt/onym-web/runtime/bin/node /opt/bsn-np/current/server.mjs
+Environment=PORT=4181
+Environment=BSN_KEY_FILE=/etc/bsn-np/signing.key
+Environment=BSN_DB_FILE=/var/lib/bsn-np/records.json
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bsn-np
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M
+TasksMax=64
+[Install]
+WantedBy=multi-user.target
