@@ -11,8 +11,8 @@ Requires Node.js 22.12+ (or a newer supported LTS).
 ```sh
 cd web
 npm ci
-npm test
 npm run build
+npm test
 npm start
 ```
 
