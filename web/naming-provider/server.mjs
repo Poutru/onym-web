@@ -95,6 +95,20 @@ const server = http.createServer(async (req, res) => {
         res.end('{"status":"ok"}');
         return;
       }
+      if (path === "guide") {
+        res.writeHead(308, { Location: "/bsn-np/guide/" });
+        res.end();
+        return;
+      }
+      if (path === "guide/") {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader(
+          "Content-Security-Policy",
+          "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+        );
+        res.end(await readFile(new URL("./guide.html", import.meta.url)));
+        return;
+      }
       if (path === "protocol.md") {
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.end(await readFile(new URL("./protocol.md", import.meta.url)));
@@ -107,7 +121,7 @@ const server = http.createServer(async (req, res) => {
           "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
         );
         res.end(
-          `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>BSN Naming Provider</title><style>body{max-width:760px;margin:10vh auto;padding:24px;background:#f4f7fa;color:#172435;font:18px/1.65 system-ui}h1{font-size:42px}a{color:#205de7}code{overflow-wrap:anywhere}li{margin:14px 0}</style><h1>Ваше имя из BSN — в Onym</h1><p>Провайдер читает тег <code>Name</code> вашего Stellar-аккаунта и выдаёт подписанную запись имени для идентичности Onym.</p><ol><li>Откройте «Моя идентичность → Имя из BSN» в <a href="https://onym.predhit.com/">Onym Web</a>.</li><li>Введите свой Stellar-адрес. Если нужна связь, добавьте тег <code>OwnershipFull</code> (или свободный номер) со значением, которое покажет клиент.</li><li>Проверьте имя и подтвердите публикацию связи. Запрос подписывается внутри вашего браузера.</li></ol><p>Изменить имя можно только в Stellar. Одинаковые имена допустимы: аккаунт и источник остаются видны. Провайдер не получает приватных ключей.</p><p><a href="manifest.json">Манифест</a> · <a href="profile.json">Профиль</a> · <a href="policy.json">Политика</a> · <a href="protocol.md">Протокол API</a></p></html>`,
+          `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>BSN Naming Provider</title><style>body{max-width:760px;margin:10vh auto;padding:24px;background:#f4f7fa;color:#172435;font:18px/1.65 system-ui}h1{font-size:42px}a{color:#205de7}code{overflow-wrap:anywhere}li{margin:14px 0}</style><h1>Ваше имя из BSN — в Onym</h1><p>Провайдер читает тег <code>Name</code> вашего Stellar-аккаунта и выдаёт подписанную запись имени для идентичности Onym.</p><p><a href="guide/">Как связать имя из BSN с Onym и показать его в чатах — по шагам, с примерами API →</a></p><ol><li>Откройте «Моя идентичность → Имя из BSN» в <a href="https://onym.predhit.com/">Onym Web</a>.</li><li>Введите свой Stellar-адрес. Если нужна связь, добавьте тег <code>OwnershipFull</code> (или свободный номер) со значением, которое покажет клиент.</li><li>Проверьте имя и подтвердите публикацию связи. Запрос подписывается внутри вашего браузера.</li></ol><p>Изменить имя можно только в Stellar. Одинаковые имена допустимы: аккаунт и источник остаются видны. Провайдер не получает приватных ключей.</p><p><a href="manifest.json">Манифест</a> · <a href="profile.json">Профиль</a> · <a href="policy.json">Политика</a> · <a href="protocol.md">Протокол API</a></p></html>`,
         );
         return;
       }
