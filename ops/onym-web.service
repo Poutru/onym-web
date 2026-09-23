@@ -1,0 +1,31 @@
+[Unit]
+Description=Onym Web browser client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=onym-web
+Group=onym-web
+WorkingDirectory=/opt/onym-web/current
+ExecStart=/opt/onym-web/runtime/bin/node /opt/onym-web/current/server/index.mjs
+Environment=HOST=127.0.0.1
+Environment=PORT=4180
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
