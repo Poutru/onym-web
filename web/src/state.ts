@@ -21,6 +21,13 @@ export const stateSchema = z.object({
   version: z.literal(1),
   phrase: z.string().max(300),
   name: z.string().min(1).max(60),
+  naming: z
+    .object({
+      enabled: z.boolean(),
+      account: z.string(),
+      record: z.string().optional(),
+    })
+    .optional(),
   settings: settingsSchema,
   groups: z.array(groupSchema).max(100),
   offers: z

@@ -22,6 +22,15 @@ import {
 import { InboxTransport, limitedJson } from "./transport";
 import { stateSchema, type State, type Group, type Settings } from "./state";
 import { encryptVault, writeVault } from "./vault";
+import {
+  acceptName,
+  disavowName,
+  namingManifest,
+  resolveName,
+  recordDigest,
+  type NameRecord,
+  NAMING_NS,
+} from "./naming";
 const chainSchema = z.object({
   epoch: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   commitment: z.string().refine((s) => {
@@ -113,6 +122,101 @@ export function verifyInvitation(
 }
 export class Client {
   identity: Identity;
+  names = new Map<string, { record: NameRecord; until: number }>();
+  private resolvingNames = false;
+  nameFor(signingKey: string) {
+    const n = this.names.get(signingKey);
+    return n && n.until > Date.now() ? n.record : undefined;
+  }
+  get displayName() {
+    return (
+      this.nameFor(hex(this.identity.signingPublic))?.displayName ||
+      this.state.name
+    );
+  }
+  get displayLabel() {
+    return this.nameFor(hex(this.identity.signingPublic))
+      ? this.displayName + " @" + NAMING_NS
+      : this.state.name;
+  }
+  async refreshNames(groupId?: string) {
+    if (!this.live || !this.state.naming?.enabled || this.resolvingNames)
+      return;
+    this.resolvingNames = true;
+    try {
+      const m = await namingManifest();
+      const g = this.state.groups.find((g) => g.group_id === groupId);
+      const keys = [
+        hex(this.identity.signingPublic),
+        ...Object.values(g?.member_profiles || {}).map((p) =>
+          hex(unb64(p.sending_pubkey)),
+        ),
+      ];
+      for (const key of [...new Set(keys)].slice(0, 20)) {
+        if (!this.live || !this.state.naming?.enabled) break;
+        try {
+          const r = await resolveName("onym:key:" + key, m.policy);
+          if (!this.live || !this.state.naming?.enabled) break;
+          const active = r.records
+            .filter((r) => r.status === "active")
+            .sort((a, b) => b.record.sequence - a.record.sequence)[0];
+          if (active)
+            this.names.set(key, {
+              record: active.record,
+              until: Math.min(
+                Date.parse(r.expiresAt),
+                Date.parse(active.record.expiresAt),
+                Date.parse(active.acceptance!.expiresAt),
+              ),
+            });
+          else this.names.delete(key);
+        } catch {
+          this.names.delete(key);
+        }
+      }
+    } catch {
+      this.names.clear();
+    } finally {
+      this.resolvingNames = false;
+      if (this.live) this.changed();
+    }
+  }
+  async useName(record: NameRecord) {
+    const r = await acceptName(record, this.identity);
+    if (!this.live) return;
+    this.state.naming = {
+      enabled: true,
+      account: record.stellarAccount,
+      record: recordDigest(record),
+    };
+    this.names.set(hex(this.identity.signingPublic), {
+      record,
+      until: Date.parse(r.expiresAt),
+    });
+    await this.save();
+  }
+  async removeName() {
+    if (this.state.naming?.record)
+      await disavowName(this.state.naming.record, this.identity);
+    if (!this.live) return;
+    this.state.naming = {
+      enabled: false,
+      account: this.state.naming?.account || "",
+    };
+    this.names.clear();
+    await this.save();
+  }
+  async toggleNaming(enabled: boolean) {
+    this.state.naming = {
+      ...this.state.naming,
+      enabled,
+      account: this.state.naming?.account || "",
+    };
+    this.names.clear();
+    await this.save();
+    if (enabled) await this.refreshNames();
+  }
+
   live = true;
   transport?: InboxTransport;
   private saveQueue = Promise.resolve();
@@ -175,6 +279,7 @@ export class Client {
     this.state.groups = [];
     this.state.pending = [];
     this.state.offers = [];
+    this.names.clear();
   }
   async join(link: string) {
     const cap = parseInviteLink(link);
@@ -186,7 +291,7 @@ export class Client {
       joiner_bls_pub: b64(this.identity.blsPublic),
       joiner_leaf_hash: b64(leafHash(this.identity.blsSecret)),
       joiner_sending_pub: b64(this.identity.signingPublic),
-      joiner_display_label: this.state.name,
+      joiner_display_label: this.displayLabel,
       group_id: cap.group_id,
       ...(rules
         ? {

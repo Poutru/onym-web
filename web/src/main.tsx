@@ -14,6 +14,9 @@ import { hex, b64 } from "./bytes";
 import { parseInviteLink, offerLink } from "./wire";
 import { secureUrl } from "./transport";
 import "./style.css";
+import { BSNName } from "./BSNName";
+import { NAMING_NS } from "./naming";
+import { unb64 } from "./bytes";
 const errorText = (e: unknown) =>
   e instanceof Error ? e.message : "Не удалось выполнить действие";
 function download(value: unknown) {
@@ -143,6 +146,20 @@ function App() {
     selected,
     client?.state.groups.find((g) => g.group_id === selected)?.messages.length,
   ]);
+  useEffect(() => {
+    if (!client) return;
+    const refresh = () => {
+      void client.refreshNames(tab === "chats" ? selected : undefined);
+      redraw((n) => n + 1);
+    };
+    refresh();
+    const timer = setInterval(refresh, 30000);
+    const expiryTimer = setInterval(() => redraw((n) => n + 1), 1000);
+    return () => {
+      clearInterval(timer);
+      clearInterval(expiryTimer);
+    };
+  }, [client, selected, tab, client?.state.naming?.enabled]);
   async function run(action: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -499,9 +516,14 @@ function App() {
             {connection}
           </div>
           <button className="person" onClick={() => setTab("identity")}>
-            <span className="avatar">{client.state.name[0].toUpperCase()}</span>
+            <span className="avatar">
+              {client.displayName[0].toUpperCase()}
+            </span>
             <span>
-              {client.state.name}
+              {client.displayName}
+              {client.nameFor(hex(client.identity.signingPublic)) && (
+                <small className="bsn-source">BSN</small>
+              )}
               <small>Ключи на устройстве</small>
             </span>
           </button>
@@ -646,10 +668,30 @@ function App() {
                       key={m.message_id}
                     >
                       <strong>
-                        {m.sender_bls_pubkey_hex === me
-                          ? "Вы"
-                          : g.member_profiles[m.sender_bls_pubkey_hex]?.alias ||
-                            "BLS " + m.sender_bls_pubkey_hex.slice(0, 8)}
+                        {(() => {
+                          const profile =
+                            g.member_profiles[m.sender_bls_pubkey_hex];
+                          const key = profile
+                            ? hex(unb64(profile.sending_pubkey))
+                            : "";
+                          const named = client.nameFor(key);
+                          return named ? (
+                            <span title={named.name + "@" + NAMING_NS}>
+                              {named.displayName}
+                              <small className="bsn-source">
+                                @{NAMING_NS} ·{" "}
+                                {named.stellarAccount.slice(0, 6)}…
+                                {named.stellarAccount.slice(-6)}
+                                {m.sender_bls_pubkey_hex === me ? " · Вы" : ""}
+                              </small>
+                            </span>
+                          ) : m.sender_bls_pubkey_hex === me ? (
+                            "Вы"
+                          ) : (
+                            profile?.alias ||
+                            "BLS " + m.sender_bls_pubkey_hex.slice(0, 8)
+                          );
+                        })()}
                       </strong>
                       <p>
                         {m.variant.body || "Вложение (пока не поддерживается)"}
@@ -768,12 +810,21 @@ function App() {
         ) : tab === "identity" ? (
           <section className="page">
             <div className="profile-hero">
-              <span className="avatar big">{client.state.name[0]}</span>
+              <span className="avatar big">{client.displayName[0]}</span>
               <div>
-                <h1>{client.state.name}</h1>
+                <h1>{client.displayName}</h1>
+                {client.nameFor(hex(client.identity.signingPublic)) && (
+                  <small className="bsn-source">@{NAMING_NS}</small>
+                )}
                 <span className="pill">Идентичность Onym</span>
               </div>
             </div>
+            <BSNName
+              key={client.identity.id}
+              client={client}
+              run={run}
+              busy={busy}
+            />
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -788,7 +839,7 @@ function App() {
               }}
             >
               <label>
-                Отображаемое имя
+                Локальное имя (если BSN не подключён)
                 <input
                   name="name"
                   defaultValue={client.state.name}
@@ -859,13 +910,6 @@ function App() {
               {showPhrase && (
                 <p className="secret pre">{client.identity.phrase}</p>
               )}
-            </div>
-            <div className="card">
-              <h3>Имена из BSN</h3>
-              <p className="muted">
-                Подключение провайдера имён — следующий этап. Эта версия не
-                выдаёт непроверенные BSN-данные за подтверждённое имя.
-              </p>
             </div>
           </section>
         ) : (

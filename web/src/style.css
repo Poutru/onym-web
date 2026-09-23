@@ -933,3 +933,36 @@ a {
     background: #fbfcf8;
   }
 }
+
+.bsn-source {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+  color: var(--muted, #66788a);
+}
+.bsn-panel {
+  margin: 24px 0;
+}
+.bsn-help {
+  padding: 18px;
+  margin: 18px 0;
+  background: #edf3ff;
+  border-radius: 14px;
+}
+.bsn-active {
+  border-left: 3px solid #1fa982;
+  padding-left: 14px;
+}
+.bsn-panel code {
+  overflow-wrap: anywhere;
+}
+.bsn-panel .check {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 20px;
+}
+.bsn-panel .check input {
+  width: auto;
+}
