@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve, extname, sep } from "node:path";
-const root = fileURLToPath(new URL("../dist/", import.meta.url));
+const root = resolve(fileURLToPath(new URL("../dist/", import.meta.url)));
 const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -56,8 +56,15 @@ const server = http.createServer(async (req, res) => {
           return;
         }
       }
-      const b = JSON.parse(body);
+      let b;
+      try {
+        b = JSON.parse(body);
+      } catch {
+        b = null;
+      }
       if (
+        !b ||
+        typeof b !== "object" ||
         !/^C[A-Z2-7]{55}$/.test(b.contractID) ||
         b.contractType !== "tyranny" ||
         !["testnet", "public"].includes(b.network) ||
@@ -140,5 +147,5 @@ setInterval(() => {
 server.listen(
   Number(process.env.PORT || 4173),
   process.env.HOST || "127.0.0.1",
-  () => console.log("Onym Web listening on port " + (process.env.PORT || 4173)),
+  () => console.log("Onym Web listening on port " + server.address().port),
 );
