@@ -32,13 +32,14 @@ The small server serves the built app and forwards **only** `get_commitment` / `
 - Verify invitation membership commitments with the native Onym Poseidon parameters, then check the selected relayer's exact epoch/current or historical commitment.
 - Receive authenticated mobile-format envelopes and member announcements; send/receive text chat messages. Outgoing messages become “accepted by relay” only after a Nostr `OK`; this is **not** a recipient read receipt.
 - Configure relay, Stellar network and Tyranny contract.
+- Receive native group invitation offers, preview and explicitly accept them.
+- Optional BSN names: signed requests, Stellar OwnershipFull binding, explicit record acceptance, pinned registry verification, live freshness checks and disavowal. Provider deployed at https://atlas.predhit.com/bsn-np/; source and HTTP specification in [web/naming-provider/](web/naming-provider/protocol.md). This is an experimental implementation profile of the Onym naming draft.
 
 ## Not implemented yet
 
 - Browser generation of TurboPlonk group-create/update proofs; creating/administering groups and establishing new 1:1 groups.
 - Media, calls, moderation, payments, push notifications, multi-identity UI, group rename/avatar/removal events.
 - Onym Object HTTP backup interoperability: the downloadable file is a **web-vault archive**, not an Onym mobile backup.
-- BSN naming-provider protocol and proof acceptance. The UI explicitly identifies this as a next step.
 - Guaranteed historical recovery solely from a phrase. Group state needs the encrypted web archive or a new invitation; relays may not retain old events.
 
 ## Validation
