@@ -966,3 +966,7 @@ a {
 .bsn-panel .check input {
   width: auto;
 }
+
+.page .card button:not([class]) {padding:10px 16px;border:1px solid #d4ded4;border-radius:10px;background:#edf1e8;color:#214a3d;font:inherit;font-weight:600;margin:4px 0;}
+.page .card code {overflow-wrap:anywhere;word-break:break-word;}
+.page details.card summary {cursor:pointer;font-weight:700;}

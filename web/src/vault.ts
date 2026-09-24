@@ -97,7 +97,12 @@ export function parseVault(raw: unknown) {
 }
 function db(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const r = indexedDB.open("onym-web", 1);
+    const r = indexedDB.open(
+      import.meta.env.BASE_URL === "/preview/"
+        ? "onym-web-preview"
+        : "onym-web",
+      1,
+    );
     r.onupgradeneeded = () => r.result.createObjectStore("vault");
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
@@ -128,4 +133,19 @@ export async function writeVault(v: VaultEnvelope) {
   } finally {
     d.close();
   }
+}
+
+/** Removes only the preview vault; never the main client's database. */
+export async function resetPreviewVault() {
+  if (import.meta.env.BASE_URL !== "/preview/") throw Error("Доступно только в Preview");
+  const d = await db();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = d.transaction("vault", "readwrite");
+      tx.objectStore("vault").delete("main");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally { d.close(); }
 }

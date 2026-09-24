@@ -36,9 +36,9 @@ it("serves the production HTML and its hashed JavaScript with security headers",
   );
   const html = await res.text();
   expect(html).toContain('id="root"');
-  const asset = html.match(/src="(\/assets\/[^" ]+\.js)"/)?.[1];
+  const asset = html.match(/src="((?:\/preview)?\/assets\/[^" ]+\.js)"/)?.[1];
   expect(asset).toBeTruthy();
-  const js = await fetch(base + asset);
+  const js = await fetch(base + asset!.replace(/^\/preview/, ""));
   expect(js.status).toBe(200);
   expect(js.headers.get("content-type")).toContain("javascript");
   expect((await js.text()).length).toBeGreaterThan(1000);
@@ -55,4 +55,18 @@ it("rejects chain writes and malformed JSON without forwarding them", async () =
     body: "{}",
   });
   expect(crossOrigin.status).toBe(403);
+});
+it("refuses arbitrary URLs in the public service document proxy", async () => {
+  const r = await fetch(
+    base +
+      "/api/service-document?url=" +
+      encodeURIComponent("http://127.0.0.1/secret"),
+  );
+  expect(r.status).toBe(400);
+  const credentials = await fetch(
+    base +
+      "/api/service-document?url=" +
+      encodeURIComponent("https://evil.example/manifest.json"),
+  );
+  expect(credentials.status).toBe(400);
 });

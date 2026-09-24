@@ -80,3 +80,18 @@ Run `server.mjs` with Node 24. `BSN_KEY_FILE` is an existing raw 32-byte seed, `
 Onym Web constructs an **unsigned** XDR locally using the official Stellar SDK. It reloads the source account and sequence from Horizon, finds the first unused `OwnershipFull`/`OwnershipFullN` key, and creates exactly one ManageData operation containing the Onym signing key's Stellar address. Existing tags are never overwritten; the current account sequence prevents reuse after another transaction from the same source.
 
 The transaction uses Stellar PUBLIC, a 15-minute validity window, and the maximum of the current base fee and the observed p90 charged fee, capped at 0.01 XLM. The UI shows that exact fee and the current base reserve required for one new data entry. It offers XDR copy/download and a `web+stellar:tx` SEP-7 URI. No callback URL, secret, payment, signer change, or auto-submit is included. The holder signs and submits in their own Stellar wallet, then clicks “Я отправил — проверить связь”. Generating XDR alone neither modifies Stellar nor publishes a naming acceptance.
+
+
+## Website configuration and Onym authentication (preview, 2026-09-24)
+
+The signed manifest now declares `authentication` (protocol, OIDC issuer, RP client_id, required scopes with reasons) and `configuration` (website mode, required_before_use, initiate_login_uri, description, status_endpoint). The issuer is `https://atlas.predhit.com/auth`; the BSN account website is `/bsn-np/account`; the experimental web authenticator is `https://onym.predhit.com/preview/`. The existing inline BSN interface remains supported.
+
+The website authenticates through OIDC Authorization Code + PAR + PKCE. It receives the explicit `urn:onym:claim:signing-key` claim after user consent, then saves a Stellar account for that subject. Login does not issue or accept a name. The wallet signs and submits any required Stellar binding transaction separately.
+
+`POST v1/configuration-status` accepts the same signed `request` envelope as other private operations, with operation `configuration-status` and no additional fields. It returns a provider-signed `configuration` envelope using the existing domain-separated signature suite: version, subject, requestNonce (the original request nonce), state (`setup_required`, `pending`, `ready`), optional stellarAccount and displayName, checkedAt, expiresAt (at most 60 seconds). Ready means live Stellar name and binding checks succeeded, not that the name is accepted.
+
+`POST v1/request-issuance` additionally accepts `useSavedConfiguration:true` instead of stellarAccount. After validating the subject signature and nonce, the provider selects only that subject's saved account and rechecks Stellar before issuance. A fresh client-signed request is mandatory. The existing explicit stellarAccount request remains compatible.
+
+The return link opens the provider screen in preview, then the client uses these signed API requests. It verifies the response and offers the exact name for explicit acceptance. The link carries no record, identity assertion, browser session token or permission to publish.
+
+Auth implementation details and limitations are in `README-auth.md`. This is an experimental implementation of the published draft, not a claim of complete support for every draft extension or native-client archive format.

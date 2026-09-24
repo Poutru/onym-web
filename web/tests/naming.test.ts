@@ -271,3 +271,42 @@ it("browser verifies both signatures and fails closed on stale, expired or unacc
     ),
   ).toThrow("Владелец");
 });
+it("saved website settings remain subject-bound and issuance still requires a fresh signature", async () => {
+  const service = await createService({
+    key: issuer,
+    fetchAccount: async () => ({
+      Name: enc("Test Name"),
+      OwnershipFull: enc(stellarAddress(aliceKey)),
+    }),
+  });
+  await service.saveSetup(subject, account);
+  const query = requestProof("configuration-status", {}, alice);
+  const status = await service.call("configuration-status", query);
+  expect(status.state).toBe("ready");
+  expect(status.requestNonce).toBe((query as any).nonce);
+  expect(verifySigned("configuration", status, issuerPublic)).toBe(true);
+  await expect(service.call("configuration-status", query)).rejects.toThrow();
+  await expect(
+    service.call("request-issuance", { subject, useSavedConfiguration: true }),
+  ).rejects.toThrow();
+  const result = await service.call(
+    "request-issuance",
+    requestProof("request-issuance", { useSavedConfiguration: true }, alice),
+  );
+  expect(result.records[0].record.subject).toBe(subject);
+  expect(result.records[0].record.stellarAccount).toBe(account);
+  expect(result.records[0].status).toBe("unaccepted");
+});
+it("shows legacy accepted names without website setup and prevents replacing their account", async () => {
+  const { service, offer, accept } = await setup();
+  const record = await offer();
+  expect(await service.getAcceptedName(subject)).toBeNull();
+  await accept(record);
+  expect(await service.getSetup(subject)).toBeNull();
+  expect(await service.getAcceptedName(subject)).toEqual(record);
+  expect(await service.getAcceptedName("onym:key:" + "ab".repeat(32))).toBeNull();
+  await expect(service.saveSetup(subject, alice.stellarAccount)).rejects.toThrow();
+  expect(await service.getSetup(subject)).toBeNull();
+  await service.saveSetup(subject, account);
+  expect(await service.getSetup(subject)).toEqual({ account });
+});

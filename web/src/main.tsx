@@ -8,12 +8,14 @@ import {
   readVault,
   writeVault,
   parseVault,
+  resetPreviewVault,
 } from "./vault";
 import { stateSchema, defaultSettings, type State } from "./state";
 import { hex, b64 } from "./bytes";
 import { parseInviteLink, offerLink } from "./wire";
 import { secureUrl } from "./transport";
 import "./style.css";
+import { Services, LoginApproval } from "./ServicesHub";
 import { BSNName } from "./BSNName";
 import { NAMING_NS } from "./naming";
 import { unb64 } from "./bytes";
@@ -44,7 +46,11 @@ function App() {
     [notice, setNotice] = useState(""),
     [client, setClient] = useState<Client | null>(null),
     [, redraw] = useState(0),
-    [tab, setTab] = useState("chats"),
+    [tab, setTab] = useState(
+      location.hash.includes("auth=") || location.hash.includes("services=")
+        ? "settings"
+        : "chats",
+    ),
     [selected, setSelected] = useState(""),
     [link, setLink] = useState(""),
     [draft, setDraft] = useState(""),
@@ -64,7 +70,9 @@ function App() {
       return;
     }
     void navigator.locks.request(
-      "onym-web-vault",
+      import.meta.env.BASE_URL === "/preview/"
+        ? "onym-web-preview-vault"
+        : "onym-web-vault",
       { ifAvailable: true },
       async (lock) => {
         if (!lock) {
@@ -94,6 +102,35 @@ function App() {
       release();
     };
   }, []);
+  useEffect(() => {
+    const channel = new BroadcastChannel("onym-web-preview-auth");
+    channel.onmessage = (e) => {
+      if (
+        typeof e.data?.requestId !== "string" ||
+        !/^[\w-]{43}$/.test(e.data.requestId)
+      )
+        return;
+      if (blocked) return;
+      location.hash = "auth=" + e.data.requestId;
+      setTab("settings");
+    };
+    if (blocked) {
+      const requestId = new URLSearchParams(location.hash.slice(1)).get("auth");
+      if (requestId) channel.postMessage({ requestId });
+    }
+    const onHash = () => {
+      if (
+        location.hash.includes("auth=") ||
+        location.hash.includes("services=")
+      )
+        setTab("settings");
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => {
+      channel.close();
+      window.removeEventListener("hashchange", onHash);
+    };
+  }, [blocked]);
   function clearSecrets() {
     setPassword("");
     setRepeat("");
@@ -284,7 +321,10 @@ function App() {
       <div className="loading">
         <h1>Хранилище уже открыто</h1>
         <p>
-          {error || "Закройте другую вкладку Onym Web и обновите эту страницу."}
+          {error ||
+            (location.hash.includes("auth=")
+              ? "Запрос входа передан в уже открытую вкладку Onym Preview. Перейдите туда, откройте «Подключения» и подтвердите вход. Если вкладка заблокирована, сначала разблокируйте её."
+              : "Закройте другую вкладку Onym Preview и обновите эту страницу.")}
         </p>
       </div>
     );
@@ -321,7 +361,7 @@ function App() {
         </section>
         <section className="auth">
           <div className="auth-inner">
-            <span className="pill">Ранняя версия · 0.1</span>
+            <span className="pill">Preview · отдельное хранилище</span>
             <h2>{exists ? "С возвращением" : "Ваш Onym начинается здесь"}</h2>
             <p className="muted">
               {exists
@@ -481,6 +521,10 @@ function App() {
             </p>
           </div>
         </section>
+        {exists && import.meta.env.BASE_URL === "/preview/" && <div className="card"><p>Чтобы открыть другую идентичность, можно очистить только хранилище Preview. Основная версия останется нетронутой.</p><button className="secondary" disabled={busy} onClick={()=>run(async()=>{
+          if(!confirm("Очистить локальные данные Preview? Сначала сохраните зашифрованную копию, если эти ключи или переписка вам нужны. Данные основной версии не изменятся."))return;
+          await closing.current; await resetPreviewVault(); setExists(false);clearSecrets();setNotice("Хранилище Preview очищено.");
+        })}>Очистить хранилище Preview</button></div>}
       </main>
     );
   return (
@@ -543,7 +587,7 @@ function App() {
                   ? "Моя идентичность"
                   : "Подключения"}
           </span>
-          <span className="pill">Onym Web · ранняя версия</span>
+          <span className="pill">Onym Web · Preview</span>
         </header>
         <div className="flashes">{flash}</div>
         {tab === "chats" ? (
@@ -819,12 +863,14 @@ function App() {
                 <span className="pill">Идентичность Onym</span>
               </div>
             </div>
-            <BSNName
-              key={client.identity.id}
-              client={client}
-              run={run}
-              busy={busy}
-            />
+            {import.meta.env.BASE_URL !== "/preview/" && (
+              <BSNName
+                key={client.identity.id}
+                client={client}
+                run={run}
+                busy={busy}
+              />
+            )}
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -915,6 +961,7 @@ function App() {
         ) : (
           <section className="page">
             <h1>Ваши подключения</h1>
+            <Services client={client} run={run} busy={busy} />
             <p className="muted">
               Используйте те же реле, сеть и контракт, что и участники вашей
               группы.

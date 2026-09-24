@@ -28,6 +28,19 @@ export const stateSchema = z.object({
       record: z.string().optional(),
     })
     .optional(),
+  services: z
+    .object({
+      source: z.object({
+        url: z.string().url(),
+        key: z.string().regex(/^[a-f0-9]{64}$/),
+        sequence: z.number().optional(),
+      }),
+      selected: z.record(
+        z.string(),
+        z.object({ url: z.string().url(), manifest: z.any() }),
+      ),
+    })
+    .optional(),
   settings: settingsSchema,
   groups: z.array(groupSchema).max(100),
   offers: z

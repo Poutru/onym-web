@@ -149,7 +149,7 @@ const errors: Record<string, string> = {
   superseded: "Уже существует более новая запись имени.",
   rate_limited: "Слишком много запросов. Повторите через минуту.",
 };
-async function api(path: string, body?: unknown) {
+export async function api(path: string, body?: unknown) {
   const r = await fetch(NAMING_URL + path, {
     method: body ? "POST" : "GET",
     headers: body ? { "Content-Type": "application/json" } : {},
@@ -335,4 +335,38 @@ export async function resolveName(subject: string, policy: string) {
     subject,
     policy,
   );
+}
+
+export async function configuredName(identity: Identity) {
+  const subject = "onym:key:" + hex(identity.signingPublic),
+    m = await namingManifest();
+  const existing = await resolveName(subject, m.policy);
+  const active = existing.records
+    .filter((row) => row.status === "active")
+    .sort((a, b) => b.record.sequence - a.record.sequence)[0];
+  if (active) return { state: "active", record: active.record };
+  const proof = requestProof("configuration-status", {}, identity);
+  const status = await api("v1/configuration-status", proof);
+  if (
+    !verifySigned("configuration", status) ||
+    status.subject !== subject ||
+    status.requestNonce !== (proof as any).nonce ||
+    Date.parse(status.expiresAt) <= Date.now() ||
+    Date.parse(status.checkedAt) > Date.now() + 5000
+  )
+    throw Error("Не удалось проверить состояние настройки");
+  if (status.state !== "ready") return { state: String(status.state) };
+  const raw = await api(
+    "v1/request-issuance",
+    requestProof("request-issuance", { useSavedConfiguration: true }, identity),
+  );
+  const r = verifyResolution(raw, subject, m.policy),
+    row = r.records[0];
+  if (
+    !row ||
+    row.status !== "unaccepted" ||
+    Date.parse(row.record.expiresAt) <= Date.now()
+  )
+    throw Error("Неверное предложение имени");
+  return { state: "ready", record: row.record };
 }

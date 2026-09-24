@@ -140,7 +140,8 @@ export class Client {
       : this.state.name;
   }
   async refreshNames(groupId?: string) {
-    if (!this.live || !this.state.naming?.enabled || this.resolvingNames)
+    const enabled = () => this.state.naming?.enabled ?? (import.meta.env.BASE_URL === "/preview/");
+    if (!this.live || !enabled() || this.resolvingNames)
       return;
     this.resolvingNames = true;
     try {
@@ -153,14 +154,14 @@ export class Client {
         ),
       ];
       for (const key of [...new Set(keys)].slice(0, 20)) {
-        if (!this.live || !this.state.naming?.enabled) break;
+        if (!this.live || !enabled()) break;
         try {
           const r = await resolveName("onym:key:" + key, m.policy);
-          if (!this.live || !this.state.naming?.enabled) break;
+          if (!this.live || !enabled()) break;
           const active = r.records
             .filter((r) => r.status === "active")
             .sort((a, b) => b.record.sequence - a.record.sequence)[0];
-          if (active)
+          if (active) {
             this.names.set(key, {
               record: active.record,
               until: Math.min(
@@ -169,7 +170,15 @@ export class Client {
                 Date.parse(active.acceptance!.expiresAt),
               ),
             });
-          else this.names.delete(key);
+            if (key === hex(this.identity.signingPublic) && !this.state.naming) {
+              this.state.naming = {
+                enabled: true,
+                account: active.record.stellarAccount,
+                record: recordDigest(active.record),
+              };
+              await this.save();
+            }
+          } else this.names.delete(key);
         } catch {
           this.names.delete(key);
         }

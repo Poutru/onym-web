@@ -9,14 +9,19 @@
     "test": "vitest run",
     "preview": "vite preview --host 127.0.0.1",
     "start": "node server/index.mjs",
-    "format": "prettier --write src tests server index.html vite.config.ts"
+    "format": "prettier --write src tests server index.html vite.config.ts",
+    "build:preview": "tsc -b && vite build --base=/preview/"
   },
   "dependencies": {
     "@noble/curves": "2.0.1",
     "@noble/hashes": "2.0.1",
     "@scure/bip39": "2.0.1",
     "@stellar/stellar-sdk": "17.1.0",
+    "express": "5.2.1",
     "hash-wasm": "4.12.0",
+    "jose": "6.2.12",
+    "oidc-provider": "9.12.2",
+    "openid-client": "6.8.8",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "zod": "4.1.11"

@@ -33,6 +33,7 @@ export async function createService({
     } catch (e) {
       if (e.code !== "ENOENT") throw e;
     }
+  db.setups ||= {};
   const pub = publicHex(key);
   let queue = Promise.resolve();
   const sign = (kind, value) => signed(kind, value, key);
@@ -92,6 +93,26 @@ export async function createService({
     implementationProfileId: PROFILE,
     namingProfileId: profile.profileId,
     policy: policyHash,
+    authentication: {
+      protocol: "onym-oidc-v1",
+      issuer: "https://atlas.predhit.com/auth",
+      client_id: "atlas-bsn",
+      permissions: [
+        {
+          scope: "urn:onym:scope:signing-key",
+          required: true,
+          reason:
+            "Связать идентичность Onym со Stellar-аккаунтом и получить имя из BSN.",
+        },
+      ],
+    },
+    configuration: {
+      mode: "website",
+      required_before_use: true,
+      initiate_login_uri: BASE + "login",
+      description: "Укажите Stellar-адрес и подтвердите его связь с Onym.",
+      status_endpoint: BASE + "v1/configuration-status",
+    },
     endpoints: [
       { uri: BASE + "v1/", role: "resolve" },
       { uri: BASE + "v1/", role: "issue" },
@@ -180,7 +201,39 @@ export async function createService({
     });
   async function mutate(operation, b) {
     const subjectPub = auth(b, operation);
+    if (operation === "configuration-status") {
+      const setup = db.setups[b.subject];
+      let state = "setup_required",
+        displayName;
+      if (setup) {
+        try {
+          const ev = await evidence(setup.account, subjectPub);
+          state = "ready";
+          displayName = ev.displayName;
+        } catch (e) {
+          if (e instanceof Fault && [404, 409, 422].includes(e.status))
+            state = "pending";
+          else throw e;
+        }
+      }
+      await persist();
+      return sign("configuration", {
+        version: 1,
+        subject: b.subject,
+        requestNonce: b.nonce,
+        state,
+        ...(setup ? { stellarAccount: setup.account } : {}),
+        ...(displayName ? { displayName } : {}),
+        checkedAt: iso(clock()),
+        expiresAt: iso(clock() + 60000),
+      });
+    }
     if (operation === "request-issuance" || operation === "renew-record") {
+      if (b.useSavedConfiguration === true) {
+        const setup = db.setups[b.subject];
+        if (!setup) throw new Fault("setup_required", 409);
+        b = { ...b, stellarAccount: setup.account };
+      }
       const ev = await evidence(b.stellarAccount, subjectPub);
       if (Object.keys(db.records).length >= 100000)
         throw new Fault("capacity_reached", 503);
@@ -257,7 +310,33 @@ export async function createService({
     await persist();
     return envelope(b.subject, [await resolution(e)]);
   }
+  async function acceptedName(subject) {
+    const entries = Object.values(db.records)
+      .filter((e) => e.record.subject === subject && e.acceptance?.publish === true)
+      .sort((a, b) => b.record.sequence - a.record.sequence);
+    for (const e of entries) {
+      if (await status(e) === "active") return { ...e.record };
+    }
+    return null;
+  }
   return {
+    getAcceptedName: acceptedName,
+    async getSetup(subject) {
+      return db.setups[subject] ? { ...db.setups[subject] } : null;
+    },
+    async saveSetup(subject, account) {
+      if (!keyOf(subject) || !validAccount(account))
+        throw new Fault("invalid_setup");
+      const result = queue.then(async () => {
+        const active = await acceptedName(subject);
+        if (active && active.stellarAccount !== account)
+          throw new Fault("active_name_account_locked", 409);
+        db.setups[subject] = { account };
+        await persist();
+      });
+      queue = result.catch(() => {});
+      return result;
+    },
     manifest,
     profile,
     policy,

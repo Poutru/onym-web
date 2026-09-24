@@ -23,6 +23,38 @@ const server = http.createServer(async (req, res) => {
   );
   try {
     const url = new URL(req.url, "http://localhost");
+    if (url.pathname === "/api/service-document") {
+      const target = url.searchParams.get("url") || "";
+      const allowed =
+        /^(https:\/\/atlas\.predhit\.com\/(?:manifest\.json|catalogs\/public-services\.json|bsn-np\/manifest\.json|simple-backup\/(?:manifest\.json|terms\/[a-f0-9]{64}\.json))|https:\/\/(?:authority|relayer|backup)\.onym\.app\/manifest\.json|https:\/\/discovery\.onym\.app\/manifests\/(?:onym-courier|onym-blossom)\.json)$/;
+      if (req.method !== "GET" || !allowed.test(target)) {
+        res.writeHead(400);
+        res.end('{"error":"unsupported_document"}');
+        return;
+      }
+      const up = await fetch(target, {
+        redirect: "error",
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!up.ok) {
+        res.writeHead(502);
+        res.end('{"error":"upstream_unavailable"}');
+        return;
+      }
+      let length = 0;
+      const parts = [];
+      for await (const part of up.body) {
+        length += part.length;
+        if (length > 2000000) throw Error("document_too_large");
+        parts.push(part);
+      }
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      });
+      res.end(Buffer.concat(parts));
+      return;
+    }
     if (url.pathname === "/api/chain") {
       if (req.method !== "POST") {
         res.writeHead(405);
